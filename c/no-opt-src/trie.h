@@ -386,7 +386,8 @@ static int TR_delete_recursive(TR_trie_node_t *node, const char *key)
     return 0;
 }
 #else
-// NOTE(@Mr-segfault): Helper for Arena mode: Just clear masks so we don't follow dead paths
+// NOTE(@Mr-segfault): Helper for Arena mode:
+// Just clear masks so we don't follow dead paths
 static int TR_delete_logical_recursive(TR_trie_node_t *node, const char *key) {
     if (!node) return 0;
 
@@ -401,7 +402,8 @@ static int TR_delete_logical_recursive(TR_trie_node_t *node, const char *key) {
     } else {
         node->is_end = 0;
     }
-    //NOTE(@Mr-segfault): Tell parent: "I am now a dead end" if I have no children and am not a word end
+    //NOTE(@Mr-segfault): Tell parent:
+    // "I am now a dead end" if I have no children and am not a word end
     return (node->children_mask == 0 && !node->is_end);
 }
 #endif

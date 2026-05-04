@@ -58,7 +58,7 @@ int main(int argc, char **argv)
         count++;
     }
     end = clock();
-    fprintf(out, "Inserted %llu words: %f seconds\n", count, (double)(end - start) / CLOCKS_PER_SEC);
+    fprintf(out, "Insert: %f ms\n", ((double)(end - start) * 1000.0) / CLOCKS_PER_SEC);
 
     rewind(file);
     start = clock();
@@ -69,7 +69,7 @@ int main(int argc, char **argv)
         }
     }
     end = clock();
-    fprintf(out, "Get %llu words: %f seconds\n", count, (double)(end - start) / CLOCKS_PER_SEC);
+    fprintf(out, "Get: %f ms\n", ((double)(end - start) * 1000.0) / CLOCKS_PER_SEC);
 
     rewind(file);
     start = clock();
@@ -80,7 +80,7 @@ int main(int argc, char **argv)
         }
     }
     end = clock();
-    fprintf(out, "Delete %llu words: %f seconds\n", count, (double)(end - start) / CLOCKS_PER_SEC);
+    fprintf(out, "Delete: %f ms\n", ((double)(end - start) * 1000.0) / CLOCKS_PER_SEC);
 
 cleanup:
     if (out != stdout) fclose(out);

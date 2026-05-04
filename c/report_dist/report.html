@@ -1,0 +1,105 @@
+
+<html><head><style>
+    body { font-family: 'Consolas', monospace; background: #0a0a0a; color: #f0f0f0; padding: 20px; }
+    .card { background: #141414; padding: 30px; border-radius: 8px; border: 1px solid #333; max-width: 1100px; margin: auto; }
+    table { width: 100%; border-collapse: collapse; margin-top: 20px; background: #1a1a1a; }
+    th, td { padding: 12px; border: 1px solid #333; text-align: left; }
+    img { width: 100%; border: 2px solid #333; margin-bottom: 20px; }
+    h1 { color: #ffffff; text-align: center; letter-spacing: 2px; }
+</style></head><body><div class="card">
+    <h1>TRIE PERFORMANCE ANALYSIS</h1>
+    <p style="text-align:center; color:#888;">N = 200 Iterations | Stats: Mean, StdDev, Mode</p>
+    <img src="summary_plot.png">
+    <table>
+        <tr><th>Configuration</th><th>Op</th><th>Mean ± StdDev</th><th>Mode (rounded)</th></tr>
+        <tr><th colspan='4' style='background:#222; color:#00FFFF;'>Dataset: 15kb-word.txt</th></tr>
+            <tr style="border-top: 2px solid #444;">
+                <td rowspan="2"><b>No-Opt (Debug)</b></td>
+                <td style="color:#00FFFF"><b>Insert</b></td>
+                <td>52.911 ms ± 22.239</td>
+                <td>Mode: 39.42 ms</td>
+            </tr>
+            <tr>
+                <td style="color:#3D5AFE"><b>Search</b></td>
+                <td>14.003 ms ± 6.001</td>
+                <td>Mode: 9.03 ms</td>
+            </tr>
+            <tr style="border-top: 2px solid #444;">
+                <td rowspan="2"><b>No-Opt (Release)</b></td>
+                <td style="color:#00FFFF"><b>Insert</b></td>
+                <td>54.096 ms ± 13.561</td>
+                <td>Mode: 38.95 ms</td>
+            </tr>
+            <tr>
+                <td style="color:#3D5AFE"><b>Search</b></td>
+                <td>13.973 ms ± 3.270</td>
+                <td>Mode: 13.52 ms</td>
+            </tr>
+            <tr style="border-top: 2px solid #444;">
+                <td rowspan="2"><b>Full-Opt (Debug)</b></td>
+                <td style="color:#00FFFF"><b>Insert</b></td>
+                <td>5.715 ms ± 2.014</td>
+                <td>Mode: 4.90 ms</td>
+            </tr>
+            <tr>
+                <td style="color:#3D5AFE"><b>Search</b></td>
+                <td>3.871 ms ± 1.737</td>
+                <td>Mode: 2.87 ms</td>
+            </tr>
+            <tr style="border-top: 2px solid #444;">
+                <td rowspan="2"><b>Full-Opt (Release)</b></td>
+                <td style="color:#00FFFF"><b>Insert</b></td>
+                <td>3.722 ms ± 0.765</td>
+                <td>Mode: 3.50 ms</td>
+            </tr>
+            <tr>
+                <td style="color:#3D5AFE"><b>Search</b></td>
+                <td>2.443 ms ± 0.533</td>
+                <td>Mode: 1.98 ms</td>
+            </tr><tr><th colspan='4' style='background:#222; color:#00FFFF;'>Dataset: 30kb-word.txt</th></tr>
+            <tr style="border-top: 2px solid #444;">
+                <td rowspan="2"><b>No-Opt (Debug)</b></td>
+                <td style="color:#00FFFF"><b>Insert</b></td>
+                <td>93.740 ms ± 29.321</td>
+                <td>Mode: 70.13 ms</td>
+            </tr>
+            <tr>
+                <td style="color:#3D5AFE"><b>Search</b></td>
+                <td>29.281 ms ± 7.845</td>
+                <td>Mode: 29.63 ms</td>
+            </tr>
+            <tr style="border-top: 2px solid #444;">
+                <td rowspan="2"><b>No-Opt (Release)</b></td>
+                <td style="color:#00FFFF"><b>Insert</b></td>
+                <td>96.020 ms ± 23.906</td>
+                <td>Mode: 85.82 ms</td>
+            </tr>
+            <tr>
+                <td style="color:#3D5AFE"><b>Search</b></td>
+                <td>29.508 ms ± 6.454</td>
+                <td>Mode: 30.76 ms</td>
+            </tr>
+            <tr style="border-top: 2px solid #444;">
+                <td rowspan="2"><b>Full-Opt (Debug)</b></td>
+                <td style="color:#00FFFF"><b>Insert</b></td>
+                <td>10.747 ms ± 3.361</td>
+                <td>Mode: 8.65 ms</td>
+            </tr>
+            <tr>
+                <td style="color:#3D5AFE"><b>Search</b></td>
+                <td>6.923 ms ± 2.579</td>
+                <td>Mode: 5.67 ms</td>
+            </tr>
+            <tr style="border-top: 2px solid #444;">
+                <td rowspan="2"><b>Full-Opt (Release)</b></td>
+                <td style="color:#00FFFF"><b>Insert</b></td>
+                <td>4.831 ms ± 1.311</td>
+                <td>Mode: 5.33 ms</td>
+            </tr>
+            <tr>
+                <td style="color:#3D5AFE"><b>Search</b></td>
+                <td>3.041 ms ± 0.809</td>
+                <td>Mode: 2.34 ms</td>
+            </tr>
+    </table>
+</div></body></html>
