@@ -1,0 +1,5 @@
+TODO:
+
+Write some test cases for bench mark.
+Write the CI pipeline for the C cases.
+Add auto complete in the trie.
