@@ -1,0 +1,21 @@
+BENCH MARK
+
+Benchmarking (NO ARENA MODE): ./15kb-word.txt
+Inserted 15000 words: 0.016012 seconds
+Get 15000 words:      0.003206 seconds
+Delete 15000 words (logical): 0.006093 seconds
+
+Benchmarking (NO ARENA MODE): ./30kb-word.txt
+Inserted 30000 words: 0.027380 seconds
+Get 30000 words:      0.006791 seconds
+Delete 30000 words (logical): 0.012355 seconds
+
+Benchmarking (ARENA MODE): ./15kb-word.txt
+Inserted 15000 words: 0.012174 seconds
+Get 15000 words:      0.003129 seconds
+Delete 15000 words (logical): 0.002922 seconds
+
+Benchmarking (ARENA MODE): ./30kb-word.txt
+Inserted 30000 words: 0.023463 seconds
+Get 30000 words:      0.006944 seconds
+Delete 30000 words (logical): 0.006474 seconds

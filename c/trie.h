@@ -47,14 +47,25 @@ int main(void)
 typedef struct TR_trie_t TR_trie_t;
 typedef struct TR_trie_node_t TR_trie_node_t;
 
-// NOTE(Mr-Segfault): Enum for error
-typedef enum
-{
-    TR_SUCCESS,
-    TR_CREATE_NODE_FAILURE,
-    TR_GET_NULL_NODE_ERROR,
-    TR_GET_NOT_NODE_ERROR,
+// NOTE(Mr-Segfault): Thread-local error variable
+typedef enum {
+    TR_SUCCESS = 0,
+    TR_ERR_OUT_OF_MEMORY,
+    TR_ERR_INVALID_KEY,
+    TR_ERR_NOT_FOUND,
+    TR_ERR_NULL_ARGUMENT
 } TR_error_t;
+
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L && !defined(__STDC_NO_THREADS__)
+    #include <threads.h>
+    #define TR_THREAD_LOCAL thread_local
+#elif defined(_MSC_VER)
+    #define TR_THREAD_LOCAL __declspec(thread)
+#else
+    #define TR_THREAD_LOCAL __thread
+#endif
+
+extern TR_THREAD_LOCAL TR_error_t TR_errno;
 
 // NOTE(Mr-Segfault): This is a function pointer callback used by our trie structure
 // To get the errors if we incounter any because I thought what would make a better api rather than keeping track of a global error var. Note that this function does exit if an error is found so be wary of calling this function.
@@ -77,6 +88,10 @@ struct TR_trie_t
 {
     TR_trie_node_t *root;
     TR_error_callback on_error;
+
+#ifdef TR_USE_ARENA
+    void *arena;
+#endif
 };
 
 // NOTE(Mr-Segfault): Creates a trie.
@@ -89,7 +104,7 @@ void TR_destroy(TR_trie_t *trie);
 // NOTE(Mr-Segfault): Inserts a key into an existing trie.
 // return TR_SUCESS if inserted. Returns TR_CREATE_NODE_FAILURE if it could not
 // create a node to be inserted
-TR_error_t TR_insert(TR_trie_t *trie, const char *key);
+int TR_insert(TR_trie_t *trie, const char *key);
 
 // NOTE(Mr-Segfault):  Gets an element from the trie.
 // Return an existing node if found else returns NULL.
@@ -97,10 +112,13 @@ TR_trie_node_t *TR_get(TR_trie_t *trie, const char *key);
 
 // NOTE(Mr-Segfault): Checks the existense of a prefix of chars in the trie
 // Returns TS_SUCCESS if found else returns TR_GET_NULL_NODE_ERROR.
-TR_error_t TR_prefix_search(TR_trie_t *trie, const char *key);
+int TR_prefix_search(TR_trie_t *trie, const char *key);
 
 // NOTE(Mr-Segfault): Delete a node from the trie using a key
-TR_error_t TR_delete(TR_trie_t *trie, const char *key);
+// In arena mode, delete is NOT meaningful.
+// Memory is not freed per-node; it's all freed at internal TR_destroy().
+// So TR_delete is basically logical-only and does not reclaim memory.
+int TR_delete(TR_trie_t *trie, const char *key);
 
 #if defined(TRIE_IMPLEMENTATION)
 
@@ -109,62 +127,162 @@ TR_error_t TR_delete(TR_trie_t *trie, const char *key);
 #include <assert.h>
 #include <string.h>
 
-#define TR_NODE_POOL_SIZE 10000
-static TR_trie_node_t *node_pool = NULL;
-static size_t pool_ptr = 0;
+TR_THREAD_LOCAL TR_error_t TR_errno = TR_SUCCESS;
 
 static void TR_default_error_handler(TR_error_t err, const char *ctx)
 {
     fprintf(stderr, "[TRIE ERROR %d] %s\n", err, ctx ? ctx : "");
 }
 
-static TR_trie_node_t *TR_create_node(void)
-{
-    TR_trie_node_t *node = calloc(1, sizeof(TR_trie_node_t));
-    if (!node) return NULL;
+#if defined(TR_USE_ARENA)
 
-    node->is_end = 0;
-    return node;
+#define TR_CHUNK_SIZE (1024 * 1024)
+#define TR_IS_ALLIGN(x, y) ((x & (y - 1)) == 0)
+#define TR_MIN(x, y) (((x) < (y)) ? (x) : (y))
+#define TR_MAX(x, y) (((x) > (y)) ? (x) : (y))
+
+typedef struct TR_arena_chunk_t
+{
+    struct TR_arena_chunk_t *next;
+    size_t pos;
+    size_t capacity;
+    uint8_t chunk[];
+} TR_arena_chunk_t;
+
+typedef struct
+{
+    TR_arena_chunk_t *head;
+    TR_arena_chunk_t *current;
+} TR_arena_t;
+
+static TR_arena_t *TR_arena_create(void);
+static void TR_arena_free(TR_arena_t *arena);
+static void *TR_arena_push(TR_arena_t *arena, size_t size);
+static void *TR_arena_push_zero(TR_arena_t *arena, size_t size);
+
+static TR_arena_chunk_t *TR_chunk_create(size_t size)
+{
+    TR_arena_chunk_t *c = malloc(sizeof(TR_arena_chunk_t) + size);
+    if (!c) { TR_errno = TR_ERR_OUT_OF_MEMORY; return NULL; }
+    c->next = NULL;
+    c->pos = 0;
+    c->capacity = size;
+    return c;
+}
+
+static TR_arena_t *TR_arena_create(void)
+{
+    TR_arena_t *a = malloc(sizeof(*a));
+    if (!a) { TR_errno = TR_ERR_OUT_OF_MEMORY; return NULL; }
+
+    a->head = TR_chunk_create(TR_CHUNK_SIZE);
+    if (!a->head) { free(a); return NULL; }
+
+    a->current = a->head;
+    return a;
+}
+
+static void TR_arena_free(TR_arena_t *a)
+{
+    TR_arena_chunk_t *c = a->head;
+    while (c) {
+        TR_arena_chunk_t *n = c->next;
+        free(c);
+        c = n;
+    }
+    free(a);
+}
+
+static void *TR_arena_push_zero(TR_arena_t *a, size_t size)
+{
+    TR_arena_chunk_t *c = a->current;
+    // Ensure 8-byte alignment for the next allocation
+    size_t aligned_pos = (c->pos + 7) & ~7;
+
+    if (aligned_pos + size > c->capacity) {
+        // NOTE(@Mr-segfault): If the request is larger than default chunk
+        // size it appropriately
+        size_t next_size = (size > TR_CHUNK_SIZE) ? size : TR_CHUNK_SIZE;
+        TR_arena_chunk_t *n = TR_chunk_create(next_size);
+        if (!n) return NULL;
+        
+        c->next = n;
+        a->current = n;
+        c = n;
+        aligned_pos = 0;
+    }
+
+    void *ptr = c->chunk + aligned_pos;
+    c->pos = aligned_pos + size;
+    memset(ptr, 0, size);
+    return ptr;
+}
+
+#endif // TR_USE_ARENA
+
+static void *TR_alloc(TR_trie_t *trie, size_t size)
+{
+#ifdef TR_USE_ARENA
+    void *p = TR_arena_push_zero((TR_arena_t*)trie->arena, size);
+    if (!p) TR_errno = TR_ERR_OUT_OF_MEMORY;
+    return p;
+#else
+    void *p = calloc(1, size);
+    if (!p) TR_errno = TR_ERR_OUT_OF_MEMORY;
+    return p;
+#endif
+}
+
+static TR_trie_node_t *TR_create_node(TR_trie_t *trie)
+{
+    return TR_alloc(trie, sizeof(TR_trie_node_t));
 }
 
 static void TR_report(TR_trie_t *trie, TR_error_t err, const char *ctx)
 {
-    if (trie && trie->on_error)
-        trie->on_error(err, ctx);
+    if (trie && trie->on_error) trie->on_error(err, ctx);
 }
 
-static TR_trie_t *TR_create_cb(TR_error_callback cb)
+static void TR_free(TR_trie_t *trie, void *ptr)
 {
-    TR_trie_t *trie = calloc(1, sizeof(TR_trie_t));
-    if (!trie) return NULL;
-
-    trie->root = TR_create_node();
-    if (!trie->root)
-    {
-        free(trie);
-        return NULL;
-    }
-
-#ifdef TR_CUSTOM_CALLBACK
-    trie->on_error = cb;
+#ifndef TR_USE_ARENA
+    free(ptr);
 #else
-    (void)cb;
+    (void)trie;
+    (void)ptr;
+#endif
+}
+
+
+TR_trie_t *TR_create(void)
+{
+    TR_trie_t *trie = calloc(1, sizeof(*trie));
+    if (!trie) { TR_errno = TR_ERR_OUT_OF_MEMORY; return NULL; }
+
+#ifdef TR_USE_ARENA
+    trie->arena = TR_arena_create();
+    if (!trie->arena) { free(trie); return NULL; }
+#endif
+
+    trie->root = TR_create_node(trie);
+    if (!trie->root) return NULL;
+
+#ifndef TR_CUSTOM_CALLBACK
     trie->on_error = TR_default_error_handler;
 #endif
 
     return trie;
 }
 
-TR_trie_t *TR_create(void)
-{
-    return TR_create_cb(0);
-}
-void TR_destroy_node(TR_trie_node_t *node)
+
+#ifndef TR_USE_ARENA
+static void TR_destroy_node(TR_trie_node_t *node)
 {
     if (!node) return;
-    // NOTE(@Mr-Segfault): Only traverse indices present in the mask (Performance Optimization)
+    // NOTE(@Mr-Segfault): Only traverse indices present in the mask.
+    // (Performance Optimization)
     uint32_t mask = node->children_mask;
-    for (int i = 0; mask > 0; i++) {
+    for (int i = 0; mask; i++) {
         if (mask & (1u << i)) {
             TR_destroy_node(node->children[i]);
             mask &= ~(1u << i);
@@ -172,121 +290,128 @@ void TR_destroy_node(TR_trie_node_t *node)
     }
     free(node);
 }
-
+#endif
 
 void TR_destroy(TR_trie_t *trie)
 {
     if (!trie) return;
 
+#ifdef TR_USE_ARENA
+    TR_arena_free((TR_arena_t*)trie->arena);
+#else
     TR_destroy_node(trie->root);
+#endif
+
     free(trie);
 }
 
-TR_error_t TR_insert(TR_trie_t *trie, const char *key) {
-    if (!trie || !key) {
-        TR_report(trie, TR_CREATE_NODE_FAILURE, "insert: null input");
-        return TR_CREATE_NODE_FAILURE;
-    }
-
-    if (!trie || !key) return TR_CREATE_NODE_FAILURE;
+int TR_insert(TR_trie_t *trie, const char *key)
+{
+    if (!trie || !key) { TR_errno = TR_ERR_NULL_ARGUMENT; return -1; }
 
     TR_trie_node_t *cur = trie->root;
-    for (size_t i = 0; key[i] != '\0'; i++) {
-        if (key[i] < 'a' || key[i] > 'z') {
-            TR_report(trie, TR_CREATE_NODE_FAILURE, "insert: invalid char");
-            return TR_CREATE_NODE_FAILURE;
-        }
 
-        uint32_t idx = (uint32_t)(key[i] - 'a');
-        if (!(cur->children_mask & (1u << idx))) {
-            cur->children[idx] = TR_create_node();
-            if (!cur->children[idx])  {
-                TR_report(trie, TR_CREATE_NODE_FAILURE, "alloc: Ccould not create");
-                return TR_CREATE_NODE_FAILURE;
-            }
-            cur->children_mask |= (1u << idx);
+    for (const char *p = key; *p; p++) {
+        if (*p < 'a' || *p > 'z') { TR_errno = TR_ERR_INVALID_KEY; return -1; }
+        uint32_t idx = (uint32_t)(*p - 'a');
+        uint32_t bit = 1u << idx;
+
+        if (!(cur->children_mask & bit)) {
+            cur->children[idx] = (TR_trie_node_t*)TR_alloc(trie, sizeof(TR_trie_node_t));
+            if (!cur->children[idx]) return -1;
+            cur->children_mask |= bit;
         }
         cur = cur->children[idx];
     }
     cur->is_end = 1;
-    return TR_SUCCESS;
+    return 0;
 }
 
 TR_trie_node_t *TR_get(TR_trie_t *trie, const char *key)
 {
-    if (!trie || !key) {
-        TR_report(trie, TR_GET_NULL_NODE_ERROR, "get: null input");
-        return NULL;
-    }
+    TR_errno = TR_SUCCESS;
+    if (!trie || !key) { TR_errno = TR_ERR_NULL_ARGUMENT; return NULL; }
 
     TR_trie_node_t *cur = trie->root;
-
-    for (size_t i = 0; key[i] != '\0'; i++) {
-        uint32_t idx = (uint32_t)(key[i] - 'a');
-        if (!(cur->children_mask & (1u << idx))) {
-            return NULL;
-        }
+    for (const char *p = key; *p; p++) {
+        if (*p < 'a' || *p > 'z') { TR_errno = TR_ERR_INVALID_KEY; return NULL; }
+        uint32_t idx = (uint32_t)(*p - 'a');
+        if (!(cur->children_mask & (1u << idx))) { TR_errno = TR_ERR_OUT_OF_MEMORY; return NULL; }
         cur = cur->children[idx];
     }
-    return cur->is_end ? cur : NULL;
 
+    if (!cur->is_end) { TR_errno = TR_ERR_NOT_FOUND; return NULL; }
+    return cur;
 }
 
-TR_error_t TR_prefix_search(TR_trie_t *trie, const char *key)
+int TR_prefix_search(TR_trie_t *trie, const char *key)
 {
-    if (!trie || !key) {
-        TR_report(trie, TR_GET_NULL_NODE_ERROR, "prefix: null input");
-        return TR_GET_NULL_NODE_ERROR;
-    }
+    if (!trie || !key) { TR_errno = TR_ERR_NULL_ARGUMENT; return -1; }
 
     TR_trie_node_t *cur = trie->root;
 
-    for (size_t i = 0; key[i]; i++)
-    {
-        uint32_t idx = (uint32_t)(key[i] - 'a');
-        if (idx < 0 || idx >= TR_ALPHABET_SIZE || !cur->children[idx])
-            return TR_GET_NULL_NODE_ERROR;
-
+    for (const char *p = key; *p; p++) {
+        if (*p < 'a' || *p > 'z') { TR_errno = TR_ERR_INVALID_KEY; return -1; }
+        uint32_t idx = (uint32_t)(*p - 'a');
+        if (!(cur->children_mask & (1u << idx))) return -1;
         cur = cur->children[idx];
     }
-    return TR_SUCCESS;
+
+    return 0;
 }
 
-static int TR_delete_rec(TR_trie_node_t *node, const char *key, size_t depth)
+#ifndef TR_USE_ARENA
+static int TR_delete_recursive(TR_trie_node_t *node, const char *key)
 {
     if (!node) return 0;
 
-    if (key[depth] == '\0')
-        node->is_end = 0;
-    else
-    {
-        uint32_t idx = (uint32_t)(key[depth] - 'a');
-
-        if (!(node->children_mask & (1u << idx))) return 0;
-        if (TR_delete_rec(node->children[idx], key, depth + 1)) {
+    if (*key) {
+        uint32_t idx = (uint32_t)(*key - 'a');
+        if (TR_delete_recursive(node->children[idx], key + 1)) {
             free(node->children[idx]);
             node->children[idx] = NULL;
             node->children_mask &= ~(1u << idx);
+            return (node->children_mask == 0 && !node->is_end);
         }
+    } else {
+        node->is_end = 0;
+        return (node->children_mask == 0);
     }
-
-    return (node->is_end == 0 && node->children_mask == 0);
+    return 0;
 }
+#else
+// NOTE(@Mr-segfault): Helper for Arena mode: Just clear masks so we don't follow dead paths
+static int TR_delete_logical_recursive(TR_trie_node_t *node, const char *key) {
+    if (!node) return 0;
 
-
-TR_error_t TR_delete(TR_trie_t *trie, const char *key)
-{
-    if (!trie || !key || !trie->root) {
-        TR_report(trie, TR_GET_NULL_NODE_ERROR, "delete: null input");
-        return TR_GET_NULL_NODE_ERROR;
+    if (*key) {
+        uint32_t idx = (uint32_t)(*key - 'a');
+        if (node->children_mask & (1u << idx)) {
+            if (TR_delete_logical_recursive(node->children[idx], key + 1)) {
+                // We don't free, we just "hide" the path
+                node->children_mask &= ~(1u << idx);
+            }
+        }
+    } else {
+        node->is_end = 0;
     }
-
-    // NOTE(@Mr-Segfault): We don't delete the root node itself in this implementation
-    TR_delete_rec(trie->root, key, 0);
-    return TR_SUCCESS;
+    //NOTE(@Mr-segfault): Tell parent: "I am now a dead end" if I have no children and am not a word end
+    return (node->children_mask == 0 && !node->is_end);
 }
-
-
 #endif
+
+int TR_delete(TR_trie_t *trie, const char *key) {
+    if (!trie || !key || !*key) return TR_ERR_NOT_FOUND;
+
+#ifdef TR_USE_ARENA
+    TR_delete_logical_recursive(trie->root, key);
+#else
+    TR_delete_recursive(trie->root, key);
+#endif
+
+    return 0;
+}
+
+#endif // TRIE_IMPLEMENTATION
 
 #endif //TRIE_H
