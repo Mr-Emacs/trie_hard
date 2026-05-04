@@ -67,13 +67,6 @@ typedef enum {
 
 extern TR_THREAD_LOCAL TR_error_t TR_errno;
 
-// NOTE(Mr-Segfault): This is a function pointer callback used by our trie structure
-// To get the errors if we incounter any because I thought what would make a better api rather than keeping track of a global error var. Note that this function does exit if an error is found so be wary of calling this function.
-// By default we have a default callback for error handeling if you
-// wish to customize it you can enum you own custom call back with a macro
-// #define TR_CUSTOM_CALLBACK.
-typedef void (*TR_error_callback)(TR_error_t err, const char *context);
-
 struct TR_trie_node_t
 {
     /* NOTE(Mr-Segfault): I was a bit lazy and doing bool is too much so
@@ -87,7 +80,6 @@ struct TR_trie_node_t
 struct TR_trie_t
 {
     TR_trie_node_t *root;
-    TR_error_callback on_error;
 
 #ifdef TR_USE_ARENA
     void *arena;
@@ -95,15 +87,15 @@ struct TR_trie_t
 };
 
 // NOTE(Mr-Segfault): Creates a trie.
-// Returns a trie node if success returns NULL if failure
+// Returns a trie node if success returns NULL if failure. Error can be catched.
 TR_trie_t *TR_create();
 
 // NOTE(Mr-Segfault): Destroy's an existing trie.
 void TR_destroy(TR_trie_t *trie);
 
 // NOTE(Mr-Segfault): Inserts a key into an existing trie.
-// return TR_SUCESS if inserted. Returns TR_CREATE_NODE_FAILURE if it could not
-// create a node to be inserted
+// return 0 if inserted. Returns -1 if it could not
+// create a node to be inserted. Error can be catched with errno style error.
 int TR_insert(TR_trie_t *trie, const char *key);
 
 // NOTE(Mr-Segfault):  Gets an element from the trie.
@@ -111,7 +103,7 @@ int TR_insert(TR_trie_t *trie, const char *key);
 TR_trie_node_t *TR_get(TR_trie_t *trie, const char *key);
 
 // NOTE(Mr-Segfault): Checks the existense of a prefix of chars in the trie
-// Returns TS_SUCCESS if found else returns TR_GET_NULL_NODE_ERROR.
+// Returns 0 if found else returns -1.
 int TR_prefix_search(TR_trie_t *trie, const char *key);
 
 // NOTE(Mr-Segfault): Delete a node from the trie using a key
@@ -119,6 +111,9 @@ int TR_prefix_search(TR_trie_t *trie, const char *key);
 // Memory is not freed per-node; it's all freed at internal TR_destroy().
 // So TR_delete is basically logical-only and does not reclaim memory.
 int TR_delete(TR_trie_t *trie, const char *key);
+
+// NOTE(@Mr-segfault): Prints the error message on call.
+void TR_error(const char *fmt, ...);
 
 #if defined(TRIE_IMPLEMENTATION)
 
@@ -129,9 +124,29 @@ int TR_delete(TR_trie_t *trie, const char *key);
 
 TR_THREAD_LOCAL TR_error_t TR_errno = TR_SUCCESS;
 
-static void TR_default_error_handler(TR_error_t err, const char *ctx)
+#include <stdarg.h>
+
+void TR_error(const char *fmt, ...)
 {
-    fprintf(stderr, "[TRIE ERROR %d] %s\n", err, ctx ? ctx : "");
+    const char *err_str = "UNKNOWN_ERROR";
+    switch (TR_errno) {
+        case TR_SUCCESS:           err_str = "Success"; break;
+        case TR_ERR_OUT_OF_MEMORY: err_str = "Out of memory"; break;
+        case TR_ERR_INVALID_KEY:   err_str = "Invalid key (only a-z allowed)"; break;
+        case TR_ERR_NOT_FOUND:     err_str = "Key not found"; break;
+        case TR_ERR_NULL_ARGUMENT: err_str = "Null argument provided"; break;
+    }
+
+    fprintf(stderr, "[TRIE ERROR: %s] ", err_str);
+
+    if (fmt) {
+        va_list args;
+        va_start(args, fmt);
+        vfprintf(stderr, fmt, args);
+        va_end(args);
+    }
+    
+    fprintf(stderr, "\n");
 }
 
 #if defined(TR_USE_ARENA)
@@ -238,11 +253,6 @@ static TR_trie_node_t *TR_create_node(TR_trie_t *trie)
     return TR_alloc(trie, sizeof(TR_trie_node_t));
 }
 
-static void TR_report(TR_trie_t *trie, TR_error_t err, const char *ctx)
-{
-    if (trie && trie->on_error) trie->on_error(err, ctx);
-}
-
 static void TR_free(TR_trie_t *trie, void *ptr)
 {
 #ifndef TR_USE_ARENA
@@ -266,10 +276,6 @@ TR_trie_t *TR_create(void)
 
     trie->root = TR_create_node(trie);
     if (!trie->root) return NULL;
-
-#ifndef TR_CUSTOM_CALLBACK
-    trie->on_error = TR_default_error_handler;
-#endif
 
     return trie;
 }
@@ -336,7 +342,7 @@ TR_trie_node_t *TR_get(TR_trie_t *trie, const char *key)
     for (const char *p = key; *p; p++) {
         if (*p < 'a' || *p > 'z') { TR_errno = TR_ERR_INVALID_KEY; return NULL; }
         uint32_t idx = (uint32_t)(*p - 'a');
-        if (!(cur->children_mask & (1u << idx))) { TR_errno = TR_ERR_OUT_OF_MEMORY; return NULL; }
+        if (!(cur->children_mask & (1u << idx))) { TR_errno = TR_ERR_NOT_FOUND; return NULL; }
         cur = cur->children[idx];
     }
 

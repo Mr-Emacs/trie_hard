@@ -10,21 +10,32 @@
 int main(int argc, char **argv)
 {
     if (argc < 2) {
-        printf("Usage: %s <file_path>\n", argv[0]);
+        printf("Usage: %s <input_file> [output_log_file]\n", argv[0]);
         return 1;
     }
 
     const char *file_path = argv[1];
-
     FILE *file = fopen(file_path, "r");
     if (!file) {
-        perror("Could not open file");
+        perror("Could not open input file");
         return 1;
+    }
+
+    FILE *out = stdout;
+    if (argc >= 3) {
+        out = fopen(argv[2], "a");
+        if (!out) {
+            perror("Could not open log file");
+            fclose(file);
+            return 1;
+        }
     }
 
     TR_trie_t *trie = TR_create();
     if (!trie) {
-        fprintf(stderr, "Failed to create trie\n");
+        TR_error("Could not create trie");
+        if (out != stdout) fclose(out);
+        fclose(file);
         return 1;
     }
 
@@ -33,56 +44,46 @@ int main(int argc, char **argv)
     clock_t start, end;
 
     #if defined(TR_USE_ARENA)
-        printf("Benchmarking (ARENA MODE): %s\n", file_path);
+        fprintf(out, "Benchmarking (ARENA MODE): %s\n", file_path);
     #else
-        printf("Benchmarking (NO ARENA MODE): %s\n", file_path);
+        fprintf(out, "Benchmarking (NO ARENA MODE): %s\n", file_path);
     #endif
 
     start = clock();
-
     while (fscanf(file, "%1023s", word) == 1) {
-        TR_insert(trie, word);
+        if (TR_insert(trie, word) != 0) {
+            TR_error("Could not insert word: %s", word);
+            goto cleanup;
+        }
         count++;
-        if (count % 1000000 == 0) printf("Inserted %llu words...\n", count);
     }
-
     end = clock();
-    printf("Inserted %llu words: %f seconds\n",
-           count,
-           (double)(end - start) / CLOCKS_PER_SEC);
+    fprintf(out, "Inserted %llu words: %f seconds\n", count, (double)(end - start) / CLOCKS_PER_SEC);
 
     rewind(file);
-
     start = clock();
-
     while (fscanf(file, "%1023s", word) == 1) {
-        TR_get(trie, word);
+        if (TR_get(trie, word) == NULL) { 
+            TR_error("Could not get word: %s", word);
+            goto cleanup;
+        }
     }
-
     end = clock();
-    printf("Get %llu words:      %f seconds\n",
-           count,
-           (double)(end - start) / CLOCKS_PER_SEC);
+    fprintf(out, "Get %llu words: %f seconds\n", count, (double)(end - start) / CLOCKS_PER_SEC);
 
-    /*
-        NOTE:
-        In arena mode, delete is NOT meaningful.
-        Memory is not freed per-node; it's all freed at TR_destroy().
-        So TR_delete is basically logical-only and does not reclaim memory.
-    */
     rewind(file);
-
     start = clock();
-
     while (fscanf(file, "%1023s", word) == 1) {
-        TR_delete(trie, word);
+        if (TR_delete(trie, word) != 0) {
+            TR_error("Could not delete word: %s", word);
+            goto cleanup;
+        }
     }
-
     end = clock();
-    printf("Delete %llu words (logical): %f seconds\n",
-           count,
-           (double)(end - start) / CLOCKS_PER_SEC);
+    fprintf(out, "Delete %llu words: %f seconds\n", count, (double)(end - start) / CLOCKS_PER_SEC);
 
+cleanup:
+    if (out != stdout) fclose(out);
     fclose(file);
     TR_destroy(trie);
 
